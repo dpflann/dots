@@ -1,0 +1,13 @@
+[alias]
+    co = checkout
+    ci = commit
+    cm = commit -m
+    br = branch
+    st = status
+    newBr = checkout -b
+    ai = add -i
+[core]
+    editor = vim
+
+# add merge tool
+# add user(s)
