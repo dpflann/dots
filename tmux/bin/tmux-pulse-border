@@ -1,0 +1,281 @@
+#!/bin/bash
+# Animate the tmux active pane border: continuous rainbow hue rotation with a
+# breathing (pulsing-LED) brightness envelope.
+#
+# tmux has no animation timer, so we drive it externally: a background loop
+# re-sets pane-active-border-style every frame. Colors are precomputed once at
+# startup so each frame is a single `tmux set`.
+#
+#   tmux-pulse-border start [--fps N] [--hue-secs N] [--pulse-secs N]
+#   tmux-pulse-border stop
+#   tmux-pulse-border toggle
+
+set -u
+
+FPS=12          # frames per second
+HUE_SECS=""     # seconds per hue trip (blank = take palette default)
+PULSE_SECS=""   # seconds per breath, dim -> bright -> dim
+PALETTE_NAME=""   # blank = inherit from a running instance, else "rainbow"
+
+# --- palettes -------------------------------------------------------------
+# Each preset sets:
+#   HUE_START/HUE_END  degrees on the colour wheel (0=red 60=yellow 120=green
+#                      180=cyan 240=blue 300=magenta). May exceed 360 or go
+#                      negative; the maths wraps.
+#   HUE_MODE           sweep    = travel start->end and jump back. Only seamless
+#                                 for a full 360 arc.
+#                      pingpong = ease start->end->start. Required for partial
+#                                 arcs, otherwise the wrap is a visible snap.
+#   SAT                colour purity. Lower = pastel/washed, 1.0 = pure hue.
+#   VMIN/VMAX          brightness floor/ceiling of the breath. A high VMIN keeps
+#                      the border always-lit (neon); a low one lets it go dark.
+set_palette() {
+  case "$1" in
+    rainbow)
+      HUE_START=0;   HUE_END=360; HUE_MODE=sweep
+      SAT=0.95; VMIN=0.35; VMAX=1.00; DEF_HUE_SECS=8;  DEF_PULSE_SECS=2 ;;
+    cool)
+      # ice: cyan -> azure -> blue -> violet. Slow, deep breath.
+      HUE_START=165; HUE_END=280; HUE_MODE=pingpong
+      SAT=0.85; VMIN=0.28; VMAX=0.92; DEF_HUE_SECS=14; DEF_PULSE_SECS=5 ;;
+    warm)
+      # embers: magenta-red -> red -> orange -> amber. Like a coal breathing.
+      # NB 405 not 45 -- the arc must wrap FORWARD through 360, or it
+      # interpolates the long way round and detours through blue and green.
+      HUE_START=350; HUE_END=405; HUE_MODE=pingpong
+      SAT=0.92; VMIN=0.30; VMAX=1.00; DEF_HUE_SECS=11; DEF_PULSE_SECS=4 ;;
+    neon)
+      # electric sign: full wheel, pure hues, never dims much, fast flicker.
+      HUE_START=0;   HUE_END=360; HUE_MODE=sweep
+      SAT=1.00; VMIN=0.72; VMAX=1.00; DEF_HUE_SECS=5;  DEF_PULSE_SECS=0.7 ;;
+    *) echo "unknown palette: $1 (try: rainbow cool warm neon)" >&2; exit 2 ;;
+  esac
+}
+
+# --- targets ---------------------------------------------------------------
+# Which parts of the tmux UI to animate. Comma-separated via --targets.
+#   border  active pane border (fg only; note tmux cannot draw a border on an
+#           edge flush with the window edge, so a lone pane shows nothing)
+#   status  the status bar background, full width, always present
+#   window  the CURRENT window's entry in the status bar -- a subtle accent
+#           that leaves the rest of the bar alone
+#   message  command-prompt / message popup styling
+# Add a new target by writing a paint_<name>() that echoes tmux set-args, and
+# a restore_<name>(). Everything else is generic.
+TARGETS=""        # blank = inherit from a running instance, else "border,status"
+
+# Values to put back on stop. Keep these in sync with ~/.tmux.conf.
+RESTORE_BORDER="fg=magenta"
+RESTORE_STATUS="bg=green,fg=black"
+RESTORE_WINDOW="default"
+RESTORE_MESSAGE="bg=yellow,fg=black"
+
+# Each paint_* echoes a fragment of a batched tmux command.
+# $1=accent hex  $2=fg for accent  $3=dimmed hex  $4=fg for dimmed
+paint_border()  { printf 'set -g pane-active-border-style fg=%s' "$1"; }
+paint_status()  { printf 'set -g status-style bg=%s,fg=%s' "$3" "$4"; }
+paint_window()  { printf 'set -gw window-status-current-style bg=%s,fg=%s,bold' "$1" "$2"; }
+paint_message() { printf 'set -g message-style bg=%s,fg=%s' "$1" "$2"; }
+
+restore_border()  { printf 'set -g pane-active-border-style %s' "$RESTORE_BORDER"; }
+restore_status()  { printf 'set -g status-style %s' "$RESTORE_STATUS"; }
+restore_window()  { printf 'set -gw window-status-current-style %s' "$RESTORE_WINDOW"; }
+restore_message() { printf 'set -g message-style %s' "$RESTORE_MESSAGE"; }
+
+PIDFILE="${TMPDIR:-/tmp}/tmux-pulse-border.pid"
+STATEFILE="${TMPDIR:-/tmp}/tmux-pulse-border.state"
+
+cmd="${1:-toggle}"; shift 2>/dev/null || true
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --palette|-p) PALETTE_NAME="$2"; shift 2 ;;
+    --fps)        FPS="$2"; shift 2 ;;
+    --hue-secs)   HUE_SECS="$2"; shift 2 ;;
+    --pulse-secs) PULSE_SECS="$2"; shift 2 ;;
+    --sat)        SAT_OVERRIDE="$2"; shift 2 ;;
+    --targets|-t) TARGETS="$2"; shift 2 ;;
+    *) echo "unknown option: $1" >&2; exit 2 ;;
+  esac
+done
+
+# Anything not given on this command line is inherited from the currently
+# running instance, so `set -p warm` keeps your targets and `set -t border`
+# keeps your palette. Statefile format: "<palette> [<targets>] <fps>fps ..."
+if [ -f "$STATEFILE" ]; then
+  prev=$(cat "$STATEFILE" 2>/dev/null)
+  [ -n "$PALETTE_NAME" ] || PALETTE_NAME=$(printf '%s' "$prev" | awk '{print $1}')
+  [ -n "$TARGETS" ]      || TARGETS=$(printf '%s' "$prev" | sed -n 's/.*\[\([^]]*\)\].*/\1/p')
+fi
+# fall back to defaults if there was nothing to inherit
+[ -n "$PALETTE_NAME" ] || PALETTE_NAME="rainbow"
+[ -n "$TARGETS" ]      || TARGETS="border,status"
+
+# comma -> space, and validate before we do any work
+TARGET_LIST=$(printf '%s' "$TARGETS" | tr ',' ' ')
+for t in $TARGET_LIST; do
+  case "$t" in
+    border|status|window|message) ;;
+    *) echo "unknown target: $t (try: border status window message)" >&2; exit 2 ;;
+  esac
+done
+
+set_palette "$PALETTE_NAME"
+# explicit flags win over the preset's defaults
+[ -n "$HUE_SECS" ]   || HUE_SECS="$DEF_HUE_SECS"
+[ -n "$PULSE_SECS" ] || PULSE_SECS="$DEF_PULSE_SECS"
+[ -z "${SAT_OVERRIDE:-}" ] || SAT="$SAT_OVERRIDE"
+
+# Frame table length = one full hue cycle, so the loop is seamless.
+frames() {
+  awk -v n="$1" -v vc="$2" -v h0="$HUE_START" -v h1="$HUE_END" -v mode="$HUE_MODE" \
+      -v vmin="$VMIN" -v vmax="$VMAX" -v s="$SAT" '
+  BEGIN {
+    pi = 3.141592653589793
+    for (i = 0; i < n; i++) {
+      u = i / n                       # 0..1 through the cycle
+      if (mode == "pingpong") {
+        # cosine ease out-and-back: no snap at the seam, and it lingers at the
+        # two endpoint colours instead of racing through them
+        h = h0 + (h1 - h0) * (0.5 - 0.5 * cos(2 * pi * u))
+      } else {
+        h = h0 + (h1 - h0) * u
+      }
+      h = h % 360; if (h < 0) h += 360
+      v = vmin + (vmax - vmin) * (0.5 + 0.5 * sin(2 * pi * vc * u))
+      x = h / 60.0; k = int(x) % 6; f = x - int(x)
+      p = v * (1 - s); q = v * (1 - s * f); t = v * (1 - s * (1 - f))
+      if      (k == 0) { r = v; g = t; b = p }
+      else if (k == 1) { r = q; g = v; b = p }
+      else if (k == 2) { r = p; g = v; b = t }
+      else if (k == 3) { r = p; g = q; b = v }
+      else if (k == 4) { r = t; g = p; b = v }
+      else             { r = v; g = p; b = q }
+
+      R = int(r*255+0.5); G = int(g*255+0.5); B = int(b*255+0.5)
+
+      # When the colour is used as a BACKGROUND (status bar) we need readable
+      # text on top. Relative luminance decides black vs white -- a pure yellow
+      # frame needs black text, a deep blue frame needs white.
+      lum = (0.2126*r + 0.7152*g + 0.0722*b)
+      fg = (lum > 0.55) ? "#000000" : "#ffffff"
+
+      # A muted version of the same hue, for large fills where the full-
+      # brightness colour would be overwhelming to sit and look at.
+      dr = r*0.42; dg = g*0.42; db = b*0.42
+      # The dim fill needs its OWN contrast decision -- scaling a bright yellow
+      # down makes it dark, so reusing the black accent text would be illegible.
+      # (No apostrophes in here: the awk program is single-quoted.)
+      dlum = (0.2126*dr + 0.7152*dg + 0.0722*db)
+      dfg = (dlum > 0.55) ? "#000000" : "#ffffff"
+
+      # one line per frame: accent  accent-fg  dimmed  dimmed-fg
+      printf "#%02x%02x%02x %s #%02x%02x%02x %s\n", R, G, B, fg, \
+             int(dr*255+0.5), int(dg*255+0.5), int(db*255+0.5), dfg
+    }
+  }'
+}
+
+is_running() {
+  [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null
+}
+
+do_stop() {
+  if is_running; then
+    kill "$(cat "$PIDFILE")" 2>/dev/null
+  fi
+  # Restore the targets that were actually animating, not the ones requested on
+  # this command line -- otherwise `stop` after a --targets run leaves whatever
+  # it was painting frozen mid-cycle. Statefile records them; if it is missing
+  # (crash, reboot) fall back to restoring everything, which is harmless.
+  local was
+  was=$(sed -n 's/.*\[\([^]]*\)\].*/\1/p' "$STATEFILE" 2>/dev/null | tr ',' ' ')
+  [ -n "$was" ] || was="border status window message"
+  rm -f "$PIDFILE" "$STATEFILE"
+
+  local args="" frag
+  for t in $was; do
+    case "$t" in
+      border|status|window|message) ;;
+      *) continue ;;
+    esac
+    frag=$(restore_"$t")
+    if [ -z "$args" ]; then args="$frag"; else args="$args \\; $frag"; fi
+  done
+  [ -z "$args" ] || eval "tmux $args" 2>/dev/null
+}
+
+do_start() {
+  is_running && exit 0
+  tmux has-session 2>/dev/null || { echo "no tmux server" >&2; exit 1; }
+
+  local interval n vcycles
+  interval=$(awk -v f="$FPS" 'BEGIN{printf "%.4f", 1/f}')
+  n=$(awk -v f="$FPS" -v h="$HUE_SECS" 'BEGIN{printf "%d", f*h}')
+  # breaths per hue rotation -- non-integer ratios give a nice drifting beat
+  vcycles=$(awk -v h="$HUE_SECS" -v p="$PULSE_SECS" 'BEGIN{printf "%.4f", h/p}')
+
+  # Precompute the whole frame table as ready-to-run tmux argument strings, so
+  # per-frame work is just one exec -- no colour maths, no string building.
+  # bash 3.2 (macOS) has no mapfile.
+  FRAMES=()
+  while read -r accent afg dim dfg; do
+    [ -n "$accent" ] || continue
+    args=""
+    for t in $TARGET_LIST; do
+      frag=$(paint_"$t" "$accent" "$afg" "$dim" "$dfg")
+      # NB the separator must be an ESCAPED \; -- a bare ; is eaten by the shell
+      # in the eval below and everything after the first target is silently lost.
+      if [ -z "$args" ]; then args="$frag"; else args="$args \\; $frag"; fi
+    done
+    FRAMES+=("$args")
+  done < <(frames "$n" "$vcycles")
+  [ "${#FRAMES[@]}" -gt 0 ] || { echo "frame generation failed" >&2; exit 1; }
+
+  (
+    trap 'exit 0' TERM INT
+    i=0
+    while :; do
+      # word-split intentional: the frame string is a full tmux command line
+      # with `;` separators, so all targets repaint in a single tmux invocation.
+      eval "tmux ${FRAMES[$((i % ${#FRAMES[@]}))]}" 2>/dev/null || break
+      i=$((i + 1))
+      # bail out if the server went away
+      if [ $((i % 40)) -eq 0 ] && ! tmux has-session 2>/dev/null; then break; fi
+      sleep "$interval"
+    done
+    rm -f "$PIDFILE"
+  ) &
+  echo $! > "$PIDFILE"
+  echo "$PALETTE_NAME [$TARGETS] ${FPS}fps hue=${HUE_SECS}s pulse=${PULSE_SECS}s" > "$STATEFILE"
+}
+
+case "$cmd" in
+  start)  do_start ;;
+  stop)   do_stop ;;
+  toggle) if is_running; then do_stop; else do_start; fi ;;
+  # switch palettes without a visible gap
+  set)    do_stop; do_start ;;
+  status)
+    if is_running; then
+      echo "running (pid $(cat "$PIDFILE")) -- $(cat "$STATEFILE" 2>/dev/null || echo '?')"
+    else
+      echo "stopped"
+    fi ;;
+  palettes) echo "rainbow  cool  warm  neon" ;;
+  targets)  echo "border  status  window  message" ;;
+  *) cat >&2 <<EOF
+usage: $(basename "$0") {start|stop|toggle|set|status|palettes|targets} [options]
+  -p, --palette NAME   rainbow (default) | cool | warm | neon
+  -t, --targets LIST   comma-separated: border,status,window,message
+                       (default: border,status)
+      --fps N           frames per second
+      --hue-secs N      seconds per colour cycle   (overrides palette default)
+      --pulse-secs N    seconds per breath         (overrides palette default)
+      --sat N           0..1 colour saturation     (overrides palette default)
+  'set' restarts with a new palette/targets; 'toggle' turns it on/off.
+  status bar uses a dimmed fill of the palette colour with auto-contrast text;
+  border/window/message use the full-brightness accent.
+EOF
+    exit 2 ;;
+esac
