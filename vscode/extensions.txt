@@ -1,0 +1,7 @@
+anthropic.claude-code
+dbaeumer.vscode-eslint
+eamodio.gitlens
+esbenp.prettier-vscode
+pawelborkar.jellyfish
+pbkit.vscode-pbkit
+vscodevim.vim

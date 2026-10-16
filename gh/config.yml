@@ -1,0 +1,7 @@
+# GitHub CLI. Auth lives in hosts.yml, which is NOT tracked here -- run
+# `gh auth login` on the new machine instead.
+version: 1
+git_protocol: https
+prompt: enabled
+aliases:
+    co: pr checkout

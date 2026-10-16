@@ -1,0 +1,8 @@
+# Atuin shell history. Only settings that differ from the shipped defaults
+# are listed here; everything else is left to atuin's own defaults so this
+# file does not drift as new versions change them.
+# Full reference: https://docs.atuin.sh/configuration/config/
+
+# Enter runs the selected command immediately instead of only pasting it
+# onto the prompt line.
+enter_accept = true
