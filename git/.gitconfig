@@ -6,8 +6,14 @@
     st = status
     newBr = checkout -b
     ai = add -i
+
 [core]
     editor = vim
 
-# add merge tool
-# add user(s)
+# Identity and any machine-local settings live here, untracked. Git ignores
+# this line silently if the file does not exist.
+#
+#   git config --file ~/.gitconfig.local user.name  "Your Name"
+#   git config --file ~/.gitconfig.local user.email "you@example.com"
+[include]
+    path = ~/.gitconfig.local
