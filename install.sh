@@ -136,6 +136,138 @@ install_git() {
   fi
 }
 
+install_claude() {
+  step "claude"
+  local dir="$HOME/.claude"
+  local settings="$dir/settings.json"
+  local ui="$DOTS/claude/settings.ui.json"
+
+  if [ -L "$dir" ]; then
+    warn "~/.claude is a symlink to $(readlink "$dir")"
+    warn "writing through it will modify that repo, not just this machine"
+  fi
+
+  local f
+  for f in "$DOTS"/claude/themes/*.json; do
+    [ -e "$f" ] || continue
+    install_file "$f" "$dir/themes/$(basename "$f")"
+  done
+
+  # Merge rather than overwrite: settings.json also holds auth and model
+  # environment config that is deliberately not tracked here, and clobbering
+  # it would break Claude Code on the target machine.
+  if ! command -v jq >/dev/null 2>&1; then
+    warn "jq not found -- skipped settings merge"
+    warn "  brew bundle installs it, then re-run: ./install.sh claude"
+    return 0
+  fi
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    printf '  would: merge %s into %s\n' "settings.ui.json" "${settings/#$HOME/~}"
+    return 0
+  fi
+
+  run mkdir -p "$dir"
+  backup "$settings"
+
+  local tmp
+  tmp=$(mktemp)
+  if [ -s "$settings" ]; then
+    jq -s '.[0] * .[1]' "$settings" "$ui" > "$tmp"
+  else
+    cp "$ui" "$tmp"
+  fi
+  mv "$tmp" "$settings"
+  ok "${settings/#$HOME/~} (merged, existing keys preserved)"
+}
+
+install_vscode() {
+  step "vscode"
+  local dir="$HOME/Library/Application Support/Code/User"
+  install_file "$DOTS/vscode/settings.json" "$dir/settings.json"
+
+  local list="$DOTS/vscode/extensions.txt"
+  [ -e "$list" ] || return 0
+
+  if command -v code >/dev/null 2>&1; then
+    local ext
+    while read -r ext; do
+      [ -n "$ext" ] || continue
+      run code --install-extension "$ext" --force
+    done < "$list"
+  else
+    # Printing beats silently doing nothing: there is no code CLI until you
+    # run VS Code's "Shell Command: Install 'code' command in PATH".
+    warn "no 'code' CLI on PATH -- install extensions manually:"
+    local ext
+    while read -r ext; do
+      [ -n "$ext" ] || continue
+      printf '      code --install-extension %s\n' "$ext"
+    done < "$list"
+  fi
+}
+
+install_atuin() {
+  step "atuin"
+  install_file "$DOTS/atuin/config.toml" "$HOME/.config/atuin/config.toml"
+
+  if ! command -v atuin >/dev/null 2>&1 && [ ! -x "$HOME/.atuin/bin/atuin" ]; then
+    warn "atuin is not installed; .zshrc sources it and will error until it is:"
+    warn "  curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh"
+    warn "  then: atuin login   (to sync existing history)"
+  fi
+}
+
+install_gh() {
+  step "gh"
+  install_file "$DOTS/gh/config.yml" "$HOME/.config/gh/config.yml"
+
+  # Skipped on dry runs: `gh auth status` is not read-only, it writes a
+  # device-id into ~/.local/state/gh.
+  if [ "$DRY_RUN" -eq 0 ] && command -v gh >/dev/null 2>&1 \
+     && ! gh auth status >/dev/null 2>&1; then
+    warn "gh is not authenticated -- run: gh auth login"
+  fi
+}
+
+install_brew() {
+  step "homebrew packages"
+
+  if ! command -v brew >/dev/null 2>&1; then
+    warn "Homebrew is not installed:"
+    warn '  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+    warn "  then re-run: ./install.sh brew"
+    return 0
+  fi
+
+  run brew bundle --file="$DOTS/Brewfile"
+  [ "$DRY_RUN" -eq 1 ] || ok "Brewfile applied"
+}
+
+# Tools installed by their own scripts rather than brew. Reported, never
+# auto-run: piping curl into sh is the caller's decision, not the script's.
+check_prereqs() {
+  local missing=()
+  [ -d "$HOME/.oh-my-zsh" ] || missing+=("oh-my-zsh")
+  { command -v atuin >/dev/null 2>&1 || [ -x "$HOME/.atuin/bin/atuin" ]; } || missing+=("atuin")
+  [ -s "$HOME/.nvm/nvm.sh" ] || missing+=("nvm")
+  command -v claude >/dev/null 2>&1 || missing+=("claude-code")
+
+  [ ${#missing[@]} -eq 0 ] && return 0
+
+  echo
+  step "not installed (each has its own installer)"
+  local m
+  for m in "${missing[@]}"; do
+    case $m in
+      oh-my-zsh)   warn 'oh-my-zsh   sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"' ;;
+      atuin)       warn "atuin       curl --proto '=https' --tlsv1.2 -LsSf https://setup.atuin.sh | sh" ;;
+      nvm)         warn "nvm         curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash" ;;
+      claude-code) warn "claude-code npm install -g @anthropic-ai/claude-code" ;;
+    esac
+  done
+}
+
 # ---------------------------------------------------------------- main
 
 usage() {
@@ -186,6 +318,8 @@ main() {
     fi
     "install_$t"
   done
+
+  check_prereqs
 
   echo
   if [ "$DRY_RUN" -eq 1 ]; then
