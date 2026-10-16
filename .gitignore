@@ -1,0 +1,7 @@
+# Machine-local overrides, sourced by the tracked configs but never tracked
+# themselves. Keeps work functions, account IDs and credentials out of a
+# public repo.
+*.local
+
+# OS files
+.DS_Store
