@@ -1,0 +1,31 @@
+{
+  "theme": "custom:neon-night",
+  "tui": "fullscreen",
+  "editorMode": "vim",
+  "showMessageTimestamps": true,
+  "autoCompactEnabled": true,
+  "modelPicker": {
+    "options": [
+      {
+        "model": "us.anthropic.claude-fable-5-1",
+        "label": "Fable 5.1",
+        "description": "Most capable — hardest reasoning and long-horizon agentic work"
+      },
+      {
+        "model": "us.anthropic.claude-opus-5-5",
+        "label": "Opus 5.5",
+        "description": "Current Opus — strong default for everyday work"
+      },
+      {
+        "model": "us.anthropic.claude-sonnet-5-5",
+        "label": "Sonnet 5.5",
+        "description": "Current Sonnet — fast and capable for coding and agents"
+      },
+      {
+        "model": "us.anthropic.claude-haiku-5-5",
+        "label": "Haiku 5.5",
+        "description": "Current Haiku — cheapest and fastest"
+      }
+    ]
+  }
+}

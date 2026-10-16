@@ -1,0 +1,49 @@
+{
+  "name": "Paper",
+  "base": "light",
+  "overrides": {
+    "claude": "#b5541f",
+    "claudeShimmer": "#d98b52",
+    "text": "#2e2a24",
+    "subtle": "#7a7266",
+    "inactive": "#a9a094",
+    "inactiveShimmer": "#c4bcb0",
+    "suggestion": "#8a7a5e",
+    "permission": "#a8600f",
+    "permissionShimmer": "#cf8c3d",
+    "remember": "#8a5a2b",
+
+    "success": "#4a7c2f",
+    "error": "#b03028",
+    "warning": "#9a6a00",
+    "warningShimmer": "#c99a2e",
+    "merged": "#7a4a8a",
+
+    "promptBorder": "#b5541f",
+    "promptBorderShimmer": "#d98b52",
+    "bashBorder": "#4a7c2f",
+    "planMode": "#7a4a8a",
+    "autoAccept": "#9a6a00",
+    "ide": "#2f6a8a",
+    "fastMode": "#b5541f",
+    "fastModeShimmer": "#e0a06a",
+
+    "diffAdded": "#dfeed3",
+    "diffRemoved": "#f7dcd8",
+    "diffAddedDimmed": "#ecf4e5",
+    "diffRemovedDimmed": "#fbeceb",
+    "diffAddedWord": "#b8dba0",
+    "diffRemovedWord": "#f2bdb6",
+
+    "userMessageBackground": "#f2ece0",
+    "userMessageBackgroundHover": "#e8dfce",
+    "bashMessageBackgroundColor": "#e8eee0",
+    "memoryBackgroundColor": "#ece5f0",
+    "selectionBg": "#dbd0ba",
+
+    "briefLabelYou": "#b5541f",
+    "briefLabelClaude": "#7a7266",
+    "rate_limit_fill": "#b5541f",
+    "rate_limit_empty": "#ddd6c8"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "Light + highlighted input",
+  "base": "light",
+  "overrides": {
+    "userMessageBackground": "#e8eeff",
+    "userMessageBackgroundHover": "#d6e0ff",
+
+    "briefLabelYou": "#2a4fd0",
+    "briefLabelClaude": "#8a8a8a",
+
+    "promptBorder": "#2a4fd0",
+    "bashBorder": "#0f7a5a",
+    "planMode": "#7a3fb8",
+    "autoAccept": "#b86a00"
+  }
+}
